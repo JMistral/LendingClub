@@ -1,0 +1,106 @@
+---
+title: "Homework 1"
+author: "Jiaming Chen"
+date: "12/12/2017"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)    # my usual tools, ggplot2, dplyr
+
+```
+
+# Data Cleaning
+
+```{r}
+getwd()
+setwd('/Users/jessie/Desktop/Bittiger/Month1')
+list.files()
+rm(list = ls())
+loan <- read.csv('../Data/loan.csv', stringsAsFactors = FALSE)
+str(loan)
+```
+
+removing the columns with over 80% of na values. 
+
+```{r}
+num.NA <- sort(sapply(loan, function(x) {sum(is.na(x))}), decreasing=TRUE) # na values in each column
+remain.col <- names(num.NA)[which(num.NA <= 0.8 * dim(loan)[1])]
+loan <- loan[, remain.col] # remaining 57 columns
+#loan$annual_inc[which(is.na(loan$annual_inc))] <- median(loan$annual_inc, na.rm = T)
+```
+
+
+## Pick up 5 categorical and 5 numerical features
+
+### Categorical
+
+Check which features are numerical and which are categorical. Some features seem to be numerical but they're actually categorical without levels (e.g. id, member_id) or somehow numerical (e.g. last_credit_pull_d, issue_d, last_pymnt_d, earliest_cr_line)
+
+```{r}
+is.num <- sapply(loan, is.numeric)
+names(is.num[which(is.num!=TRUE)])
+```
+
+For categorical features, using boxplot to see if there's a difference of response between each category is a way to explore the predictivity. 
+
+```{r}
+# Categorical variable with numerical response
+boxplot(subset(loan, term == ' 36 months')$int_rate,
+        subset(loan, term == ' 60 months')$int_rate)
+boxplot(int_rate ~ purpose, data = loan)
+boxplot(int_rate ~ pymnt_plan, data = loan)
+boxplot(int_rate ~ emp_length, data = loan) # this variable does not seem very good for prediction
+boxplot(int_rate ~ home_ownership, data = loan) 
+boxplot(int_rate ~ application_type, data = loan) 
+boxplot(int_rate ~ initial_list_status, data = loan) 
+boxplot(int_rate ~ verification_status_joint, data = loan) 
+```
+
+The five categorical variables I pick:
+> purpose
+> pymnt_plan
+> term
+> verification_status_joint
+> home_ownership
+
+I pick these five because in the boxplot the numerical response looks different for different categories. This works the same way as a two sampled t-test. Also I try to avoid choosing two highly correlated variables at the same time, so I prefer to choose variables from different groups.
+
+
+### Numerical
+
+
+```{r}
+names(is.num[which(is.num)])
+```
+
+```{r}
+library(corrplot)
+correlations <- cor(loan[, names(is.num[which(is.num)])], 
+                    use = "pairwise.complete.obs")
+corrplot(correlations, method = "circle", tl.cex = 1, type = 'lower')
+sort(abs(correlations[,'int_rate']), decreasing=TRUE) # check the absolute value of the correlation coefficients
+
+```
+
+
+By using the correlation matrix, we can find the most correlated variables. The variables with the largest absolute correlation coefficients are the best predictors.
+> total_rec_int
+> revol_util
+> inq_last_6mths
+> total_pymnt_inv
+> total_rev_hi_lim
+
+__Note that total_pymnt_inv and total_pymnt are highly correlated, so I don't want to include them at the same time__
+
+## How to generate potential useful features from the data ?
+
+First, we need to clean the data so that we don't variables with too much NA values. And before start exploring features, we need to define our response. Then we can compare the variables by their data type (numerical or categorical). For categorical variables, we can use the concept of t-test and simply use the boxplots to filter out the uncorrelated variables. For numerical variables, we can calculate the correlation matrix and select the ones with higher scores.
+
+However, I think the correlation matrix method is useful for linear data only. If the covariates and response have nonlinear relationship, this approach will not work (please correct me if I was wrong).
+
+## What other questions?
+
+I didn't explore the variables with date strings in this homework. I sort of think we need to treat them as numerical variables, but a bit differently (they're time series). By plotting the boxplot of "last_pymnt_d", I actually find that there's some patterns hidden in the time as well. Maybe we can generate new variables/features by feature engineering and make use of them~!s

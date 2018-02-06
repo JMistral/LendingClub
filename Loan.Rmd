@@ -1,0 +1,53 @@
+---
+title: "Loan"
+author: "Jiaming"
+date: "12/2/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)    # data frame manipulations
+library(ggplot2)  # plotting
+```
+
+## R Markdown
+
+```{r}
+loan <- read.csv('loan.csv', stringsAsFactors = FALSE)
+```
+
+check package MICE
+```{r}
+length(unique(loan$id))
+
+length(which(is.na(loan$annual_inc)))
+
+num.NA <- sort(sapply(loan, function(x) {sum(is.na(x))} ), decreasing = TRUE)
+
+remain.col <- names(num.NA)[which(num.NA <= 0.8 * dim(loan)[1])]
+loan <- loan[, remain.col]
+```
+
+```{r}
+loan$annual_inc[which(is.na(loan$annual_inc))] <- median( loan$annual_inc, na.rm = TRUE)
+plot(density(log(loan$annual_inc)))
+```
+
+
+categorical
+
+```{r}
+sort(table(loan$loan_status))
+
+loan$loan_status <- gsub('Does not meet the credit policy. Status:','',loan$loan_status)
+
+loan$loan_status <- with(loan, ifelse(loan_status %in% c('Current', 'Fully Paid', 'Issued'), 1, 0))
+```
+
+
+```{r}
+library(corrplot)
+
+
+```

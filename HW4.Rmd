@@ -1,0 +1,218 @@
+---
+title: "Homework 4"
+author: "Jiaming Chen"
+date: "1/5/2018"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup}
+library(tidyverse)    # my usual tools, ggplot2, dplyr
+setwd('/Users/jessie/Desktop/Bittiger/Month1')
+```
+
+## Simple Tree
+
+
+```{r}
+load('fromHW3.RData')
+```
+
+
+```{r}
+library(rpart)
+
+formula <- paste("int_rate ~ ", paste(colnames(train.sub)[-1], collapse = " + "))
+
+tree0 <- rpart(formula, method = 'anova', data = train.sub, 
+               control=rpart.control(cp = 0.001))
+
+plotcp(tree0)
+
+bestcp <- tree0$cptable[which.min(tree0$cptable[,"xerror"]), "CP"]
+
+cp.tab <- as.data.frame(tree0$cptable)
+#with(cp.tab, min(which(xerror - 2*xstd < min(xerror))))
+bestcp <- cp.tab$CP[with(cp.tab, min(which(xerror - xstd < min(xerror))))]
+# Step 3: Prune the tree using the best cp.
+tree.pruned <- prune(tree0, cp = bestcp)
+# tree.pruned$cptable
+# tree0$cptable
+# in this case tree.pruned and tree0 are the same
+# because not yet overfitting
+test.pred <- predict(tree.pruned, test)
+sqrt(sum((test.pred - test$int_rate)^2) / length(test.pred)) # 3.6
+
+plot(tree.pruned, uniform = TRUE) 
+text(tree.pruned, cex = 0.8, use.n = TRUE, xpd = TRUE) 
+```
+## Random Forest
+
+```{r}
+# random forest
+library(randomForest)
+
+# Categorical featues need to be factors when using randomForest
+train.sub$purpose <- as.factor(train.sub$purpose)
+train.sub$state_mean_int <- as.factor(train.sub$state_mean_int)
+train.sub$home_ownership <- as.factor(train.sub$home_ownership)
+train.sub$term <- as.factor(train.sub$term)
+train.sub$verification_status <- as.factor(train.sub$verification_status)
+set.seed(222)
+```
+
+```{r}
+# random forest does not allow NA values in the dataframe
+train.sub <-  na.omit(train.sub)
+
+rf <- randomForest(x = train.sub[, -1], y = train.sub[, 1], importance = TRUE,
+                   do.trace = TRUE, nodesize = 6200, ntree = 10)
+
+
+par(mar=rep(2,4)) # change margin in plot setting.
+# check the setting in par(), like 
+par()$mfrow
+par(mfrow = c(1,1))
+varImpPlot(rf)
+
+importance(rf, type = 1) # 2 for InNodePurity)
+importanceOrder= order(rf$importance[, "%IncMSE"], decreasing = T)
+names=rownames(rf$importance)[importanceOrder]
+
+```
+it looks like that "Purpose", "verification_status" and "issue_year" is good features to add.
+
+```{r}
+# partialPlot is interpreted as the predicted value for a particular value of an explanatory variable
+partialPlot(rf, train.sub, eval('annual_inc'), xlab='annual_inc')
+
+plot(rf) # see oob error
+```
+
+PartialPlot is a very good tool for interpreting our model, especially for business analysis
+
+```{r}
+test.sub$purpose <- as.factor(test.sub$purpose)
+test.sub$state_mean_int <- as.factor(test.sub$state_mean_int)
+test.sub$home_ownership <- as.factor(test.sub$home_ownership)
+test.sub$term <- as.factor(test.sub$term)
+test.sub$verification_status <- as.factor(test.sub$verification_status)
+test.sub <-  na.omit(test.sub)
+test.pred <- predict(rf, test.sub)
+sqrt(sum((test.pred - test.sub$int_rate)^2) / dim(test)[1]) # 3.50
+```
+
+# Boosting Tree
+
+```{r}
+library(xgboost) 
+train.label <- train.sub$int_rate
+# Xgboost manages only numeric vectors.
+feature.matrix <- model.matrix( ~ ., data = train.sub[, -1]) 
+# Remember we removed rows with NA in randomForest fitting. model.matrix will also remove rows with any NA.
+set.seed(222)
+gbt <- xgboost(data =  feature.matrix, 
+               label = train.label, 
+               max_depth = 8, # for each tree, how deep it goes
+               nround = 20, # number of trees
+               objective = "reg:linear",
+               nthread = 3,
+               verbose = 1)
+```
+
+
+```{r}
+importance <- xgb.importance(feature_names = colnames(feature.matrix), model = gbt)
+importance
+
+xgb.plot.importance(importance)
+```
+
+Cross Validation for gradient boosted tree
+```{r}
+par <- list( max_depth = 8,
+             objective = "reg:linear",
+             nthread = 3,
+             verbose = 2)
+gbt.cv <- xgb.cv(params = par,
+                 data = feature.matrix, label = train.label,
+                 nfold = 5, nrounds = 30)
+
+```
+
+
+```{r}
+plot(gbt.cv$evaluation_log$train_rmse_mean, type = 'l')
+lines(gbt.cv$evaluation_log$test_rmse_mean, col = 'red')
+nround = which(gbt.cv$evaluation_log$test_rmse_mean == 
+                 min(gbt.cv$evaluation_log$test_rmse_mean)) # 30
+
+```
+
+
+Grid search for best parameter combinations
+```{r}
+all_param = NULL
+all_test_rmse = NULL
+all_train_rmse = NULL
+
+for (iter in 1:10) {
+  print(iter)
+  param <- list(objective = "reg:linear",
+                max_depth = sample(5:12, 1), 
+                subsample = runif(1, .5, .9)
+                #eta = runif(1, .01, .3),
+                #gamma = runif(1, 0.0, 0.2),
+                #colsample_bytree = 1,
+                #min_child_weight = sample(1:40, 2),
+                #max_delta_step = sample(1:10, 2)
+  )
+  cv.nround = 30
+  cv.nfold = 5
+  set.seed(iter)
+  mdcv <- xgb.cv(data=feature.matrix, label = train.label, params = param, 
+                 nfold=cv.nfold, nrounds=cv.nround,
+                 verbose = F,  early_stop_round=8, 
+                 maximize = FALSE)
+  min_train_rmse = min(mdcv$evaluation_log$train_rmse_mean)
+  min_test_rmse = min(mdcv$evaluation_log$test_rmse_mean)
+  
+  all_param <- rbind(all_param, c(param$max_depth,param$subsample))
+  all_train_rmse <- c(all_train_rmse, min_train_rmse)
+  all_test_rmse <- c(all_test_rmse, min_test_rmse)
+}
+
+```
+
+```{r}
+summary(all_test_rmse)
+#find the best parameters
+best_param <- list(objective = "reg:linear",
+                       max_depth = all_param[which.min(all_test_rmse),1],
+                       subsample = all_param[which.min(all_test_rmse),2])
+
+gbt.cv.best <- xgb.cv(params = best_param,
+                 data = feature.matrix, label = train.label,
+                 nfold = 5,
+                 nrounds = 30,
+                 nthread = 3,
+                 verbose = T,early_stop_round=8,)
+
+
+```
+
+```{r}
+# prediction
+test.sub <- test.sub[which(apply(test.sub, 1, 
+                                   function(x) length(which(is.na(x))) == 0)), ]
+prediction <- predict(gbt, model.matrix( ~ ., data = test.sub[, -1]))
+# gradient boosted tree
+sqrt(sum((prediction - test.sub$int_rate)^2)/dim(test.sub)[1])
+#simple tree
+sqrt(sum((predict(tree0, test.sub) - test.sub$int_rate)^2)/dim(test.sub)[1])
+#random forest
+sqrt(sum((predict(rf, test.sub) - test.sub$int_rate)^2)/dim(test.sub)[1])
+#linear model
+sqrt(sum((predict(lm(formula, train.sub), test.sub) - test.sub$int_rate)^2)/dim(test.sub)[1])
+```

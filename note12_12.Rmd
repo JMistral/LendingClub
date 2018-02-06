@@ -1,0 +1,94 @@
+---
+title: "Untitled"
+author: "Jiaming Chen"
+date: "12/12/2017"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)    # my usual tools, ggplot2, dplyr
+```
+
+# Correlation and Causation
+
+
+
+
+# WAHT IS HYPOTHESIS TEST?
+
+## A/B Testing
+
+Define the causal relationship to be explored
+
+Define metric
+
+Design randomized experiments (A/B test)
+
+Collect data and conduct ~hypothesis testing~
+
+Draw conclusion
+
+
+
+> Null hypothesis, H0 , is usually the hypothesis that sample observations result purely from chance.
+> Alternative hypothesis, H1 or Ha, is the hypothesis that sample observations are influenced by some non-random cause
+
+# TEST ABOUT MEAN
+
+## Type I and Type II error
+
+Type I error: H0 is true but we reject it $\alpha$
+Type II error: H0 is false but we accept it $\beta$
+
+Power + $\beta$ = 1
+
+reduce error rate --> increase sample size and decrease variance 
+
+"LIFT" -- when we want to detect a small amount of LIFT, we need to decide how many samples we have to reach a certain Power (let's say 80%)
+
+
+T test is more conservative than Z test
+
+Pooled variance -- a weighted sum of variance from x1 and variance from x2
+Pooled --> student t test: equal variance, normality, independence
+unpooled --> welch test
+
+# TEST ABOUT VARIANCE
+
+Chi square test (always one sided)
+
+It's used for:
+
+> test population variance
+> goodness of fit (test), does a categorical variable has a certain distribution?
+__example: test if a coin is a fair coin or not. (observed and expected)__
+> null and alternative hypothesis
+> compare two population variance
+> compare two categorical variable to see if they have the same distribution or not
+
+
+```{r}
+loanT <- loan
+
+num.value <- sapply(loan, function(x) {return(length(unique(x)))})
+
+which(num.value == 1)
+which(num.value == dim(loan)[1])
+```
+
+## Lending club
+
+if we take Interest Rate as the response, we cannot include Loan Payment feature (because we don't have them when we decide int_rate)
+
+
+```{r}
+summary(loanT$dti_joint)
+loanT$dti <- ifelse(!is.na(loanT$dti_joint), loanT$dti_joint, loanT$dti)
+loanT$annual_inc <- ifelse(!is.na(loanT$annual_inc_joint), loanT$annual_inc_joint, loanT$annual_inc)
+
+
+#loanT$home_ownership <- ifelse()
+```
+
+

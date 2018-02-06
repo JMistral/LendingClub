@@ -1,0 +1,261 @@
+---
+title: "Homework 3"
+author: "Jiaming Chen"
+date: "1/2/2018"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)    # my usual tools, ggplot2, dplyr
+library(glmnet)
+```
+
+## loading data
+
+```{r}
+getwd()
+setwd('/Users/jessie/Desktop/Bittiger/Month1')
+list.files()
+loan <- read.csv('../Data/loan.csv', stringsAsFactors = FALSE)
+```
+
+## Clean Data
+
+First think about what features could be included in the model
+> i.e., what features would be available during model building. Work example.
+> e.g., loan payment features will not be available when deciding interest rate.
+
+Second think about what features should be included in the model
+> i.e., Remove features using intuition, Remove features with unique value per row or no variance. 
+>       Remove redundant features
+> e.g., id, member.id
+
+```{r}
+num.value <- sapply(loan, function(x){return(length(unique(x)))})
+which(num.value == 1)
+which(num.value == dim(loan)[1])
+```
+
+# Feature Engineering
+
+```{r}
+loan <- loan[,-which(colnames(loan) %in% c('id', 'member_id', 'url', 'policy_code'))]
+loan$dti <- ifelse(!is.na(loan$dti_joint), loan$dti_joint, loan$dti)
+loan$annual_inc <- ifelse(!is.na(loan$annual_inc_joint), loan$annual_inc_joint, loan$annual_inc)
+loan$home_ownership <- ifelse(loan$home_ownership %in% c('ANY', 'NONE', 'OTHER'), 'OTHER',
+                              loan$home_ownership)
+int_state <- by(loan, loan$addr_state, function(x) {
+  return(mean(x$int_rate))
+})
+loan$state_mean_int <-
+  ifelse(loan$addr_state %in% names(int_state)[which(int_state <= quantile(int_state, 0.25))], 
+         'low', ifelse(loan$addr_state %in% names(int_state)[which(int_state <= quantile(int_state, 0.5))],
+                       'lowmedium', ifelse(loan$addr_state %in% names(int_state)[which(int_state <= quantile(int_state, 0.75))], 
+                                           'mediumhigh', 'high')))
+num.NA <- sort(sapply(loan, function(x) { sum(is.na(x))} ), decreasing = TRUE)
+remain.col <- names(num.NA)[which(num.NA <= 0.8 * dim(loan)[1])]
+loan <- loan[, remain.col]
+```
+
+inputation
+
+```{r}
+num.NA <- sort(sapply(loan, function(x) { sum(is.na(x))} ), decreasing = TRUE)
+for(col.i in names(num.NA)[which(num.NA > 0)]) {
+  loan[which(is.na(loan[,col.i])), col.i] <- median(loan[,col.i], na.rm = TRUE)
+}
+```
+
+generate new features
+
+```{r}
+library(zoo)
+loan$issue_d_1 <- as.Date(as.yearmon(loan$issue_d, "%b-%Y"))
+loan$issue_year <- as.numeric(format(loan$issue_d_1, "%Y"))
+loan$issue_mon <- as.numeric(format(loan$issue_d_1, "%m"))
+int.by.year <- by(loan, loan$issue_year, function(x){return(mean(x$int_rate))})
+plot(int.by.year)
+int.by.mon <- by(loan, loan$issue_mon, function(x){return(mean(x$int_rate))})
+plot(int.by.mon)
+
+loan$earliest_cr_line_date <- as.Date(as.yearmon(loan$earliest_cr_line, "%b-%Y"))
+loan$earliest_cr_line_year <- as.numeric(format(loan$earliest_cr_line_date, "%Y"))
+int.by.year <- by(loan, loan$earliest_cr_line_year, function(x){return(mean(x$int_rate))})
+plot(int.by.year)
+# earliest_cr_line_year looks like a good predictor
+```
+
+
+## Splitting Training and Test set
+
+```{r}
+# split data into train and test for model performance
+set.seed(1)
+train.ind <- sample(1:dim(loan)[1], 0.7 * dim(loan)[1])
+train <- loan[train.ind, ]
+test <- loan[-train.ind, ]
+```
+
+
+
+# feature selection
+
+```{r}
+categ_names <- c('purpose', 'home_ownership', 'state_mean_int', 'term', 'verification_status')
+numer_names <- c('int_rate', 'annual_inc', 'dti', 'loan_amnt', 'total_acc', 'tot_cur_bal', 'open_acc',
+                 'issue_year', 'earliest_cr_line_year')
+train.sub <- train[, c(numer_names,categ_names)]
+test.sub <- test[, c(numer_names,categ_names)]
+```
+
+# Standardize
+```{r}
+train.sub.scale <- train.sub
+train.sub.scale[, c(2:9)] <- scale(train.sub.scale[, c(2:9)])
+
+test.sub.scale <- test.sub
+test.sub.scale[, c(2:9)] <- scale(test.sub.scale[, c(2:9)])
+```
+
+# Simple Linear Model
+```{r}
+results <- NULL
+mod2 <- lm(int_rate ~ ., data = train.sub.scale)
+summary(mod2)
+yhat_lm <- predict(mod2, newdata = test.sub.scale)
+# results <- rbind(results, data.frame(RMSE=mean( (yhat_lm - test.sub.scale$int_rate)^2, na.rm = T ),
+#                                       type='linear'))
+# which(is.na(yhat_lm)) --- I don't understand why there's NA in the predicted values
+```
+
+## hypothesis test
+```{r}
+train.sub.matrix <- model.matrix( ~., train.sub.scale)
+#head(train.sub.matrix)
+x <- train.sub.matrix[, -2]
+y <- train.sub.matrix[, 2]
+```
+
+## F test 
+
+works the same as ANOVA, test if the model works or not
+```{r}
+sst = sum((y - mean(y))^2) # sum of square total, df = n - 1 = 572060
+ssr = sum(mod2$res^2) #  sum of square residual, df = n-1-p = 572047
+ssm = sum((y - mean(y))^2) - sum(mod2$res^2) # sum of square model, df = 13
+Fstats = (ssm)/(13) / (ssr / (dim(train.sub)[1] - 13 -1))
+1 - pf(Fstats, 13, (dim(train.sub)[1] - 13 - 1)) # def = p and n-1-p
+```
+
+## testing residual normality
+```{r}
+# residual = observed - fitted
+# head(sort(mod2$res))
+mod2$res[which.min(mod2$res)]
+mod2$res[which.max(mod2$res)]
+plot(mod2$fit, mod2$res, xlab = 'Fitted', ylab = 'residual')
+# plot(mod2)
+```
+
+## adjustment
+
+It's impossible for the interest rate to be a negative value, so we need to adjust the model.
+```{r}
+mod2_1 <- lm(log(int_rate) ~. ,data = train.sub.scale)
+summary(mod2_1)
+mod2_1$res[which.min(mod2_1$res)]
+mod2_1$res[which.max(mod2_1$res)]
+plot(mod2_1$fit, mod2_1$res, xlab = 'Fitted', ylab = 'residual')
+
+# still large residuals for some data points. Check the reason.
+cbind(train.sub[which(mod2_1$fitted <= 1.5), ],
+      pred = round(exp(predict(mod2_1, train.sub[which(mod2_1$fitted <= 1.5), ])), 2))
+
+train.sub.scale$tanh_annual_inc <- tanh(train.sub.scale$annual_inc)
+mod2_2 <- lm(log(int_rate) ~. ,data = train.sub.scale[,-which(colnames(train.sub.scale) == 'annual_inc')])
+mod2_2$res[which.min(mod2_1$res)]
+mod2_2$res[which.max(mod2_1$res)]
+plot(mod2_2$fit, mod2_2$res, xlab = 'Fitted', ylab = 'residual')
+# much better
+
+# test on test set
+test.sub.scale$tanh_annual_inc <- tanh(test.sub.scale$annual_inc)
+yhat_lm_1 <- predict(mod2_2, newdata = test.sub.scale[,-which(colnames(test.sub.scale) == 'annual_inc')])
+results <- rbind(results, data.frame(RMSE=mean( (yhat_lm_1 - log(test.sub.scale$int_rate))^2, na.rm = T ),
+                                      type='linear_1'))
+
+# adjust the RMSE for linear model, otherwise the results are not comparable
+results <- rbind(results, data.frame(RMSE=mean( (log(yhat_lm) - log(test.sub.scale$int_rate))^2, na.rm = T ),
+                                      type='linear'))
+```
+
+# Lasso
+
+
+```{r}
+
+temp <- model.matrix( ~., train.sub.scale)
+x <- temp[, -2]
+y <- temp[, 2]
+
+temp <- model.matrix( ~., test.sub.scale)
+x_test <- temp[, -2]
+y_test <- temp[, 2]
+
+mod_lasso <- glmnet(x=x, y=log(y)) # default is alpha = 1, lasso
+plot(mod_lasso, label = T)
+plot(mod_lasso, xvar = "lambda", label = T)
+
+vnat=coef(mod_lasso)
+vnat=vnat[-1,ncol(vnat)] # remove the intercept, and get the coefficients at the end of the path
+axis(4, at=vnat,line=-.5,label=colnames(x),las=1,tick=FALSE, cex.axis=0.5) 
+
+print(mod_lasso)
+yhat_lasso <- predict(mod_lasso, newx = x_test)
+results <- rbind(results, data.frame(RMSE=mean( (yhat_lasso - log(y_test))^2, na.rm = T ),
+                                      type='lasso'))
+```
+
+
+```{r}
+# use cross validation to get optimal value of lambda, 
+cvmod_lasso <- cv.glmnet(x, log(y))
+plot(cvmod_lasso)
+# Two selected lambdas are shown, 
+cvmod_lasso$lambda.min # value of lambda gives minimal mean cross validated error
+cvmod_lasso$lambda.1se # most regularized model such that error is within one std err of the minimum
+```
+
+```{r}
+yhat_1se <- predict(cvmod_lasso,newx=x_test,s='lambda.1se')
+results <- rbind(results, data.frame(RMSE=mean( (yhat_1se - log(y_test))^2, na.rm = T ),
+                                      type='lasso_1se'))
+```
+
+
+# Ridge Regression
+
+```{r}
+cvmod_ridge <- cv.glmnet(x, log(y))
+plot(cvmod_ridge)
+yhat_ridge <- predict(cvmod_ridge,newx=x_test,s='lambda.min')
+results <- rbind(results, data.frame(RMSE=mean( (yhat_ridge - log(y_test))^2, na.rm = T ),
+                                      type='ridge_min'))
+
+yhat_ridge_1se <- predict(cvmod_ridge,newx=x_test,s='lambda.1se')
+results <- rbind(results, data.frame(RMSE=mean( (yhat_ridge_1se - log(y_test))^2, na.rm = T ),
+                                      type='ridge_1se'))
+```
+
+
+# analyze the result
+
+```{r}
+results
+```
+
+We can see from the RMSE from test set that ridge regression with 1SE lambda performs the best for this training test set split. Usually lasso regression would performs better than ridge regression, we can try another training test split and compare which model gives the most stable performance.
+
+From my point of view, lasso regression with one standard error lambda would be the best model, since it uses the smallest subset of available feature and explains the variance well.
